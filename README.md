@@ -30,3 +30,7 @@ El pipeline final completo está almacenado en:
 `models/churn_model_pipeline.joblib`
 
 Este artefacto recibe directamente DataFrames con las variables crudas originales y produce tanto las etiquetas predichas como las probabilidades de abandono.
+
+# Fase 2: Modelo Predictivo - Telco Customer Churn
+### 1. Implementación de versionamiento con Git Flow
+Se implementa para mejorar el desempeño en el ambito de desarrollo del modelo. 
