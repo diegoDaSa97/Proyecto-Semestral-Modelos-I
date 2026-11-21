@@ -1,0 +1,49 @@
+{
+  "threshold": 0.5,
+  "customers": [
+    {
+      "customerID": "DEMO-001",
+      "gender": "Female",
+      "SeniorCitizen": 0,
+      "Partner": "Yes",
+      "Dependents": "No",
+      "tenure": 2,
+      "PhoneService": "Yes",
+      "MultipleLines": "No",
+      "InternetService": "Fiber optic",
+      "OnlineSecurity": "No",
+      "OnlineBackup": "No",
+      "DeviceProtection": "No",
+      "TechSupport": "No",
+      "StreamingTV": "Yes",
+      "StreamingMovies": "Yes",
+      "Contract": "Month-to-month",
+      "PaperlessBilling": "Yes",
+      "PaymentMethod": "Electronic check",
+      "MonthlyCharges": 89.9,
+      "TotalCharges": 179.8
+    },
+    {
+      "customerID": "DEMO-002",
+      "gender": "Male",
+      "SeniorCitizen": 0,
+      "Partner": "Yes",
+      "Dependents": "Yes",
+      "tenure": 60,
+      "PhoneService": "Yes",
+      "MultipleLines": "Yes",
+      "InternetService": "DSL",
+      "OnlineSecurity": "Yes",
+      "OnlineBackup": "Yes",
+      "DeviceProtection": "Yes",
+      "TechSupport": "Yes",
+      "StreamingTV": "No",
+      "StreamingMovies": "No",
+      "Contract": "Two year",
+      "PaperlessBilling": "No",
+      "PaymentMethod": "Bank transfer (automatic)",
+      "MonthlyCharges": 65.4,
+      "TotalCharges": 3924.0
+    }
+  ]
+}

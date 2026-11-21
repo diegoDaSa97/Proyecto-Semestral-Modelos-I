@@ -19,6 +19,7 @@ fase-2/
 │   ├── Telco-Customer-Churn.csv         # Dataset de entrenamiento
 │   └── ejemplo_nuevos_clientes.csv      # Ejemplo para probar predict.py (incluye un TotalCharges vacío)
 ├── models/                  # Modelos versionados (.joblib + .json)
+├── outputs/                 # Predicciones generadas (se crea al ejecutar)
 └── tests/test_churn.py      # Pruebas con pytest
 ```
 
@@ -76,8 +77,9 @@ imputan igual que en el entrenamiento y las categorías no vistas se ignoran sin
 Si faltan columnas, el archivo no existe o no hay modelos, el script termina con un mensaje claro (código de salida 1).
 
 ## 5. Pruebas
+Desde `fase-2`, con el entorno activado:
 ```bash
-pytest
+python -m pytest
 ```
 Se usan datos sintéticos con la misma estructura del dataset (corren en pocos segundos). Verifican: limpieza
 de `TotalCharges`, generación del modelo y sus metadatos, reproducibilidad con la misma semilla, que no se
@@ -86,20 +88,61 @@ manejo de nulos y categorías desconocidas, error claro ante columnas faltantes,
 reciente y ejecución completa de la CLI.
 
 ## 6. Docker
-Los modelos no se incluyen en la imagen: se generan con `train.py` y se montan como volumen para
-conservar el versionado fuera del contenedor.
+La imagen **no entrena nada durante `docker build`**: el modelo se genera al ejecutar `train.py` en un
+contenedor. Los datos se montan desde el equipo anfitrión y los modelos, métricas y predicciones se
+escriben en carpetas del host, por lo que **persisten aunque el contenedor se elimine**.
+
+La imagen no define `ENTRYPOINT`; por eso el comando (`python train.py`, `python predict.py`) se escribe
+completo en cada `docker run`.
+
+### 6.1. Construir la imagen
 ```bash
-docker build -t churn-fase2 .
-
-# Entrenar (el modelo queda en ./models del equipo anfitrión)
-docker run --rm -v "${PWD}/models:/app/models" churn-fase2 train.py
-
-# Predecir
-docker run --rm -v "${PWD}/models:/app/models" -v "${PWD}/output:/app/output" \
-  churn-fase2 predict.py --input data/ejemplo_nuevos_clientes.csv --output output/predicciones.csv
+docker build -t churn-fase2:1.0 .
 ```
-En PowerShell escriba cada comando en una sola línea (sin `\`).
-Para predecir sobre un CSV propio, móntelo, por ejemplo: `-v "${PWD}/mis_datos:/app/mis_datos"`.
+
+### 6.2. Entrenar (los artefactos quedan en `./models`)
+```bash
+mkdir -p models outputs
+
+docker run --rm \
+  -v "${PWD}/data:/app/data:ro" \
+  -v "${PWD}/models:/app/models" \
+  churn-fase2:1.0 python train.py \
+  --data data/Telco-Customer-Churn.csv \
+  --models-dir models \
+  --version v1
+```
+El comando anterior está dividido en varias líneas solo por legibilidad: en Bash puede escribirse así.
+En PowerShell, `mkdir` no acepta `-p` y el `docker run` debe ir en una sola línea:
+`mkdir models, outputs` y luego `docker run --rm -v "${PWD}/data:/app/data:ro" -v "${PWD}/models:/app/models" churn-fase2:1.0 python train.py --data data/Telco-Customer-Churn.csv --models-dir models --version v1`.
+
+### 6.3. Predecir (los resultados quedan en `./outputs`)
+```bash
+docker run --rm \
+  -v "${PWD}/data:/app/data:ro" \
+  -v "${PWD}/models:/app/models:ro" \
+  -v "${PWD}/outputs:/app/outputs" \
+  churn-fase2:1.0 python predict.py \
+  --input data/ejemplo_nuevos_clientes.csv \
+  --output outputs/predicciones.csv
+```
+
+### 6.4. Pruebas dentro de la imagen (opcional)
+La imagen de ejecución no incluye `pytest`; para correr las pruebas en Docker se construye la etapa
+`test`, que usa el mismo código y añade las dependencias de desarrollo:
+```bash
+docker build --target test -t churn-fase2:test .
+docker run --rm churn-fase2:test
+```
+
+### 6.5. Notas de uso
+- En PowerShell, `${PWD}` funciona igual; en `cmd.exe` use `%cd%` en lugar de `${PWD}`.
+- Para predecir sobre un CSV propio, móntelo y apunte `--input` a la ruta dentro del contenedor, por
+  ejemplo: `-v "${PWD}/mis_datos:/app/mis_datos:ro"` y `--input mis_datos/clientes.csv`.
+- El montaje de datos es de solo lectura (`:ro`); el de `models` es de escritura al entrenar y de solo
+  lectura al predecir.
+- Para comprobar la persistencia: elimine el contenedor con `docker rm`, y `models/` y `outputs/` del
+  equipo seguirán intactos.
 
 ## 7. Decisiones de diseño y limitaciones
 - `train.py` entrena por defecto solo el Random Forest ya elegido en la Fase 1, en lugar de repetir la
