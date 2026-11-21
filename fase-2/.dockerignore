@@ -1,12 +1,28 @@
-__pycache__/
-*.pyc
-.pytest_cache/
-tests/
-output/
+# Entornos virtuales y cachés de Python
 venv/
+.venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Control de versiones y configuración local
 .git/
 .gitignore
+.gitattributes
+.github/
+.vscode/
+.idea/
+
+# Artefactos generados: se montan como volúmenes en `docker run`
+models/
+output/
+outputs/
+
+# Documentación y archivos que no se necesitan dentro de la imagen
 README.md
-requirements-dev.txt
-models/*
-!models/.gitkeep
+*.rar
+*.zip
+*.log

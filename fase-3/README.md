@@ -19,7 +19,8 @@ fase-3/
 ├── client/
 │   └── cliente_prueba.py       # Cliente de prueba por terminal
 ├── examples/
-│   └── solicitud_predict.json  # Ejemplo de entrada para /predict
+│   ├── solicitud_registro_unico.json  # Ejemplo de registro único para /predict
+│   └── solicitud_predict.json         # Ejemplo de lote para /predict
 ├── tests/
 │   ├── conftest.py             # Dataset sintético y fixtures
 │   └── test_api.py             # Pruebas de integración
@@ -87,9 +88,55 @@ Si la API está activa pero no encuentra un artefacto de modelo, responde HTTP 2
 
 ### 5.2. Predicción – `POST /predict`
 
-Recibe una lista de clientes. Cada cliente debe contener las 19 variables predictoras usadas durante el entrenamiento. `customerID` es opcional y se conserva en la respuesta. La variable objetivo `Churn` no se debe enviar.
+Acepta un **registro único** (forma principal) o un **lote** de clientes. En ambos casos cada registro debe contener las 19 variables predictoras usadas durante el entrenamiento. `customerID` es opcional. La variable objetivo `Churn` no se debe enviar. Un valor nulo, vacío o en blanco se imputa con la regla guardada en la Fase 2.
 
-Ejemplo de solicitud:
+#### Registro único
+
+Las variables predictoras van directamente en la raíz del cuerpo:
+
+```json
+{
+  "gender": "Female",
+  "SeniorCitizen": 0,
+  "Partner": "Yes",
+  "Dependents": "No",
+  "tenure": 2,
+  "PhoneService": "Yes",
+  "MultipleLines": "No",
+  "InternetService": "Fiber optic",
+  "OnlineSecurity": "No",
+  "OnlineBackup": "No",
+  "DeviceProtection": "No",
+  "TechSupport": "No",
+  "StreamingTV": "Yes",
+  "StreamingMovies": "Yes",
+  "Contract": "Month-to-month",
+  "PaperlessBilling": "Yes",
+  "PaymentMethod": "Electronic check",
+  "MonthlyCharges": 89.9,
+  "TotalCharges": 179.8
+}
+```
+
+Respuesta (el umbral se puede enviar como `"threshold"` en el mismo cuerpo):
+
+```json
+{"prediccion": 1, "version": "20261120_103934"}
+```
+
+`prediccion` vale `1` cuando la probabilidad alcanza o supera el umbral y `0` cuando no lo alcanza. El umbral predeterminado es `0.5` y se puede modificar entre `0` y `1`.
+
+Ejemplo con cURL (desde la raíz del repositorio):
+
+```bash
+curl -X POST http://127.0.0.1:8000/predict \
+  -H "Content-Type: application/json" \
+  --data @fase-3/examples/solicitud_registro_unico.json
+```
+
+#### Lote (opcional)
+
+Para enviar varios clientes en una sola petición se usa la clave `customers`. La respuesta incluye la versión, el número de registros y la probabilidad de cada uno:
 
 ```json
 {
@@ -145,7 +192,7 @@ Respuesta de ejemplo (los valores de probabilidad dependen del modelo activo):
 }
 ```
 
-`churn_prediction` vale `1` cuando la probabilidad alcanza o supera el umbral y `0` cuando no lo alcanza. El umbral predeterminado es `0.5` y se puede modificar entre `0` y `1`.
+En el lote, `churn_prediction` y `churn_probability` describen cada cliente y `count` indica cuántos registros se procesaron.
 
 ### 5.3. Entrenamiento – `POST /train`
 
@@ -173,6 +220,21 @@ curl -X POST http://127.0.0.1:8000/train \
 
 La respuesta incluye la versión, el algoritmo, las métricas calculadas por `train.py` y el nombre del archivo `.joblib` creado.
 
+### 5.4. Selección de la versión activa
+
+Por defecto la API usa la versión más reciente de `fase-2/models/` y, si esa carpeta no contiene modelos, el artefacto inicial `fase-1-inicial`. Para fijar una versión concreta, defina la variable de entorno `MODEL_VERSION` antes de iniciar el servicio:
+
+```bash
+# Windows PowerShell
+$env:MODEL_VERSION = "20261120_103934"
+uvicorn app.main:app
+
+# Linux / macOS
+MODEL_VERSION=20261120_103934 uvicorn app.main:app
+```
+
+Para volver al modelo inicial de Fase 1 use `MODEL_VERSION=fase-1-inicial`. Si la versión solicitada no existe, `/health` responde `degraded` y `/predict` responde HTTP 503 indicando la versión buscada. El valor se lee al cargar el modelo, por lo que un cambio requiere reiniciar el servicio.
+
 ## 6. Validación y manejo de errores
 
 | Situación | Código HTTP | Comportamiento |
@@ -180,12 +242,13 @@ La respuesta incluye la versión, el algoritmo, las métricas calculadas por `tr
 | Solicitud correcta | 200 | Devuelve estado, predicciones o resultado del entrenamiento. |
 | JSON o parámetros fuera de rango | 422 | FastAPI/Pydantic indica los campos inválidos. |
 | Faltan variables predictoras | 422 | Informa los nombres de las columnas faltantes. |
+| Tipo incompatible en una variable numérica | 422 | Nombra la variable inválida en `invalid_feature`. |
 | No existe un modelo para predecir | 503 | Indica que se debe entrenar o revisar la ruta del modelo. |
 | No existe el dataset de entrenamiento | 503 | Informa que el recurso de entrenamiento no está disponible. |
 | Se intenta repetir una versión | 409 | Evita sobrescribir un modelo existente. |
 | Parámetros de entrenamiento no aceptados | 400 | Devuelve el mensaje de validación del proceso de entrenamiento. |
 
-La solicitud de predicción acepta entre 1 y 500 clientes por petición y un umbral entre 0 y 1. Los campos adicionales no utilizados por el pipeline no participan en la predicción; las variables requeridas deben estar presentes.
+La predicción acepta un registro único o un lote de 1 a 500 clientes, y un umbral entre 0 y 1. Los campos adicionales no utilizados por el pipeline no participan en la predicción; las variables requeridas deben estar presentes. Un valor nulo o en blanco se imputa con la regla de la Fase 2.
 
 ## 7. Cliente de prueba
 
@@ -214,7 +277,10 @@ Las pruebas utilizan un dataset sintético con la misma estructura del conjunto 
 
 - Estado del servicio cuando no hay un modelo cargado.
 - Entrenamiento y activación de una versión.
-- Predicciones y rango de probabilidades.
+- Predicciones y rango de probabilidades (lote).
+- **Registro único: predicción y versión en la respuesta.**
+- **Registro único: rechazo de una variable obligatoria ausente (nombra el campo).**
+- **Registro único: rechazo de un tipo incompatible (nombra la variable).**
 - Rechazo de variables obligatorias ausentes.
 - Validación del umbral.
 - Respuesta cuando no hay un modelo disponible.
@@ -232,16 +298,46 @@ docker build -f fase-3/Dockerfile -t churn-api .
 
 docker run --rm -p 8000:8000 \
   -v "${PWD}/fase-2/models:/app/models" \
+  -v "${PWD}/fase-2/data:/app/data:ro" \
   churn-api
 ```
 
 En PowerShell, el comando puede escribirse en una sola línea:
 
 ```powershell
-docker run --rm -p 8000:8000 -v "${PWD}/fase-2/models:/app/models" churn-api
+docker run --rm -p 8000:8000 -v "${PWD}/fase-2/models:/app/models" -v "${PWD}/fase-2/data:/app/data:ro" churn-api
 ```
 
-La imagen contiene el modelo inicial de Fase 1 para que la API pueda iniciar sin ejecutar primero `/train`. El volumen conserva fuera del contenedor las versiones nuevas generadas por `/train`.
+La imagen contiene el modelo inicial de Fase 1 para que la API pueda iniciar sin ejecutar primero `/train`. Se reutilizan los dos montajes de la Fase 2: `models` (para conservar las versiones nuevas que genera `/train`) y `data` en modo solo lectura (para que `/train` use el dataset del proyecto).
+
+### 9.1. Evidencia de `/train`
+
+Tras ejecutar `/train`, la nueva versión queda en el almacenamiento persistente montado. Ejemplo real de la comprobación manual:
+
+```bash
+curl -X POST http://127.0.0.1:8000/train \
+  -H "Content-Type: application/json" \
+  -d '{"model":"random_forest","test_size":0.2,"seed":42}'
+```
+
+```json
+{
+  "message": "Entrenamiento completado y modelo activado correctamente.",
+  "version": "20261121_153012",
+  "model_type": "random_forest",
+  "metrics": {"roc_auc": 0.84, "accuracy": 0.80, "precision": 0.67, "recall": 0.51, "f1": 0.58},
+  "model_file": "churn_model_20261121_153012.joblib"
+}
+```
+
+La versión queda en la carpeta montada del host:
+
+```text
+fase-2/models/
+├── churn_model_20261121_153012.joblib
+├── churn_model_20261121_153012.json
+└── churn_model_20261120_103934.joblib   # versión anterior conservada
+```
 
 ## 10. Consideraciones de uso
 

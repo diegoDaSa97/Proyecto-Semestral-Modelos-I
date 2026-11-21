@@ -98,3 +98,46 @@ def test_train_rechaza_parametros_invalidos(api_client):
     respuesta = api_client.post("/train", json={"test_size": 1.0})
 
     assert respuesta.status_code == 422
+
+
+def _registro_plano() -> dict:
+    """Una fila del dataset sin la variable objetivo, como registro único."""
+    return (
+        generar_dataset(n=1, seed=99)
+        .drop(columns=["Churn"])
+        .to_dict(orient="records")[0]
+    )
+
+
+def test_predict_registro_unico_devuelve_prediccion_y_version(api_client):
+    entrenar_modelo(api_client)
+
+    respuesta = api_client.post("/predict", json=_registro_plano())
+
+    assert respuesta.status_code == 200, respuesta.text
+    cuerpo = respuesta.json()
+    assert set(cuerpo) == {"prediccion", "version"}
+    assert cuerpo["prediccion"] in (0, 1)
+    assert cuerpo["version"] == "20261120_120001"
+
+
+def test_predict_registro_unico_rechaza_campo_ausente(api_client):
+    entrenar_modelo(api_client)
+    registro = _registro_plano()
+    registro.pop("tenure")
+
+    respuesta = api_client.post("/predict", json=registro)
+
+    assert respuesta.status_code == 422
+    assert "tenure" in respuesta.json()["detail"]["missing_features"]
+
+
+def test_predict_registro_unico_rechaza_tipo_invalido(api_client):
+    entrenar_modelo(api_client)
+    registro = _registro_plano()
+    registro["tenure"] = "abc"
+
+    respuesta = api_client.post("/predict", json=registro)
+
+    assert respuesta.status_code == 422
+    assert respuesta.json()["detail"]["invalid_feature"] == "tenure"

@@ -49,7 +49,7 @@ if str(PHASE2_DIR) not in sys.path:
 
 # Importaciones deliberadas de la Fase 2: no se duplica la lógica de entrenamiento
 # ni la preparación de variables que ya fue probada en esa fase.
-from train import entrenar  # noqa: E402
+from train import COLUMNAS_NUMERICAS, entrenar  # noqa: E402
 from predict import encontrar_modelo_mas_reciente, predecir  # noqa: E402
 
 MODEL_DIR = Path(os.getenv("MODEL_DIR", str(DEFAULT_MODEL_DIR)))
@@ -60,13 +60,27 @@ LEGACY_MODEL_PATH = Path(
 
 
 class PredictRequest(BaseModel):
-    """Clientes nuevos que se desean evaluar."""
+    """Registro único o lote de clientes nuevos que se desean evaluar.
 
-    model_config = ConfigDict(extra="forbid")
+    Se aceptan las dos formas descritas en el enunciado:
 
-    customers: list[dict[str, Any]] = Field(
-        ..., min_length=1, max_length=500,
-        description="Lista de clientes con las 19 variables predictoras del modelo.",
+    - **Registro único** (forma principal): las variables predictoras van
+      directamente en la raíz, por ejemplo
+      ``{"tenure": 2, "gender": "Female", ...}``. La respuesta es
+      ``{"prediccion": 1, "version": "20261120_103934"}``.
+    - **Lote** (opcional): ``{"customers": [ {...}, {...} ]}``. Se conserva para
+      enviar varios clientes en una sola petición.
+
+    ``threshold`` es opcional en ambos casos.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    customers: list[dict[str, Any]] | None = Field(
+        default=None,
+        min_length=1,
+        max_length=500,
+        description="Lote opcional de clientes. Si se omite, el cuerpo es un registro único.",
     )
     threshold: float = Field(
         default=0.5, ge=0.0, le=1.0,
@@ -106,7 +120,30 @@ app.state.model_path = None
 
 
 def _buscar_archivo_modelo() -> Path:
-    """Busca primero la versión más reciente de Fase 2 y luego el modelo de Fase 1."""
+    """Busca la versión configurada, la más reciente de Fase 2 o el modelo de Fase 1.
+
+    La variable de entorno ``MODEL_VERSION`` permite fijar una versión concreta
+    (por ejemplo ``20261120_103934`` o ``fase-1-inicial``). Si no se define, se
+    conserva el comportamiento de la Fase 3: la versión más reciente de Fase 2
+    y, en su defecto, el artefacto inicial de Fase 1.
+    """
+    version_configurada = os.getenv("MODEL_VERSION", "").strip()
+    if version_configurada:
+        if version_configurada == "fase-1-inicial":
+            if LEGACY_MODEL_PATH.is_file():
+                return LEGACY_MODEL_PATH
+            raise FileNotFoundError(
+                "Se configuró MODEL_VERSION=fase-1-inicial, pero no existe el modelo inicial de Fase 1."
+            )
+
+        ruta_version = MODEL_DIR / f"churn_model_{version_configurada}.joblib"
+        if ruta_version.is_file():
+            return ruta_version
+        raise FileNotFoundError(
+            f"No se encontró la versión configurada '{version_configurada}' en '{MODEL_DIR}'. "
+            "Revise MODEL_VERSION o seleccione una versión disponible."
+        )
+
     try:
         return encontrar_modelo_mas_reciente(MODEL_DIR)
     except FileNotFoundError:
@@ -184,20 +221,20 @@ def health() -> dict[str, Any]:
         }
 
 
-@app.post("/predict", tags=["Predicción"])
-def predict_endpoint(request: PredictRequest) -> dict[str, Any]:
-    """Predice la probabilidad de abandono para uno o varios clientes."""
-    modelo, version = obtener_modelo_actual()
-    clientes = pd.DataFrame(request.customers)
-
-    # Se informa de forma directa qué variables del entrenamiento no llegaron.
-    columnas_esperadas = list(getattr(modelo, "feature_names_in_", []))
-    if not columnas_esperadas:
+def _columnas_esperadas(modelo: Any) -> list[str]:
+    """Nombres de las variables de entrada que espera el modelo entrenado."""
+    columnas = list(getattr(modelo, "feature_names_in_", []))
+    if not columnas:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="El modelo almacenado no expone los nombres de sus variables de entrada.",
         )
-    faltantes = [columna for columna in columnas_esperadas if columna not in clientes.columns]
+    return columnas
+
+
+def _verificar_columnas(modelo: Any, df: pd.DataFrame) -> None:
+    """Comprueba que llegaron todas las variables y nombra las que falten."""
+    faltantes = [c for c in _columnas_esperadas(modelo) if c not in df.columns]
     if faltantes:
         raise HTTPException(
             status_code=422,
@@ -207,18 +244,83 @@ def predict_endpoint(request: PredictRequest) -> dict[str, Any]:
             },
         )
 
+
+def _verificar_tipos(registros: list[dict[str, Any]]) -> None:
+    """Rechaza valores no numéricos en las columnas numéricas, nombrando el campo.
+
+    Se aceptan números y cadenas numéricas (compatibles con el CSV original).
+    Un valor nulo, vacío o en blanco se considera faltante y se imputa con la
+    regla guardada en la Fase 2, por lo que no es un error. Un valor como
+    ``"abc"`` se rechaza con HTTP 422 indicando la variable.
+    """
+    for registro in registros:
+        for columna in COLUMNAS_NUMERICAS:
+            valor = registro.get(columna)
+            if valor is None or (isinstance(valor, str) and valor.strip() == ""):
+                continue
+            try:
+                convertido = pd.to_numeric(
+                    pd.Series([valor]), errors="coerce"
+                ).iloc[0]
+            except (TypeError, ValueError):
+                convertido = float("nan")
+            if pd.isna(convertido):
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "message": f"La variable '{columna}' debe ser numérica.",
+                        "invalid_feature": columna,
+                    },
+                )
+
+
+def _predecir_registros(
+    modelo: Any, registros: list[dict[str, Any]], umbral: float
+) -> pd.DataFrame:
+    """Valida y predice un lote de registros con el mismo preprocesamiento."""
+    df = pd.DataFrame(registros)
+    _verificar_columnas(modelo, df)
+    _verificar_tipos(registros)
     try:
-        resultado = predecir(modelo, clientes, umbral=request.threshold)
+        return predecir(modelo, df, umbral=umbral)
     except (ValueError, TypeError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/predict", tags=["Predicción"])
+def predict_endpoint(request: PredictRequest) -> dict[str, Any]:
+    """Predice el abandono para un registro único o para un lote de clientes.
+
+    - Registro único (por defecto): el cuerpo contiene las variables predictoras
+      en la raíz y la respuesta es ``{"prediccion", "version"}``.
+    - Lote: el cuerpo incluye ``customers`` y la respuesta es
+      ``{"model_version", "count", "predictions"}``.
+    """
+    modelo, version = obtener_modelo_actual()
+
+    if request.customers is not None:
+        resultado = _predecir_registros(modelo, request.customers, request.threshold)
+        return {
+            "model_version": version,
+            "count": int(len(resultado)),
+            "predictions": jsonable_encoder(resultado.to_dict(orient="records")),
+        }
+
+    registro = request.model_extra or {}
+    if not registro:
         raise HTTPException(
             status_code=422,
-            detail=str(error),
-        ) from error
+            detail={
+                "message": "No se recibieron variables predictoras en el registro.",
+                "missing_features": _columnas_esperadas(modelo),
+            },
+        )
 
+    resultado = _predecir_registros(modelo, [registro], request.threshold)
+    fila = resultado.iloc[0]
     return {
-        "model_version": version,
-        "count": int(len(resultado)),
-        "predictions": jsonable_encoder(resultado.to_dict(orient="records")),
+        "prediccion": int(fila["churn_prediction"]),
+        "version": version,
     }
 
 
