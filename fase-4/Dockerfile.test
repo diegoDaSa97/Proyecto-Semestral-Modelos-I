@@ -1,0 +1,14 @@
+# Imagen auxiliar para ejecutar las pruebas de la Fase 4.
+# Construir después de la imagen principal:
+#   docker build -f fase-4/Dockerfile -t churn-api-fase4 .
+#   docker build -f fase-4/Dockerfile.test -t churn-api-fase4-test .
+#   docker run --rm churn-api-fase4-test
+FROM churn-api-fase4
+
+COPY fase-4/requirements-dev.txt ./requirements-dev.txt
+RUN pip install --no-cache-dir -r requirements-dev.txt
+
+COPY fase-4/pytest.ini ./pytest.ini
+COPY fase-4/tests/ ./tests/
+
+CMD ["python", "-m", "pytest", "-v"]
