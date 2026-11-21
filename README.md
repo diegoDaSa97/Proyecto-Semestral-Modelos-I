@@ -7,8 +7,8 @@ Problema: predicción de fuga de clientes (*Telco Customer Churn*, Kaggle).
 |------|-----------|---------|--------|
 | 1 | Modelo predictivo (notebook, modelo, README) | [`fase-1/`](fase-1/) | Completada |
 | 2 | Scripts (`train.py`, `predict.py`), Docker y pruebas | [`fase-2/`](fase-2/) | Completada |
-| 3 | API REST | `fase-3/` | Pendiente |
-| 4 | Monitoreo básico | `fase-4/` | Pendiente |
+| 3 | API REST | [`fase-3/`](fase-3/) | Completada |
+| 4 | Monitoreo básico | [`fase-4/`](fase-4/) | Completada |
 
 Cada fase conserva y amplía el trabajo de la anterior.
 
